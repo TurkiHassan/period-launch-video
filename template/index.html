@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="ar">
+<head>
+<meta charset="utf-8">
+<title>period launch video</title>
+<style>
+@font-face{font-family:Geist;src:url(assets/fonts/Geist-Medium.woff2) format("woff2");font-weight:500}
+@font-face{font-family:Geist;src:url(assets/fonts/Geist-SemiBold.woff2) format("woff2");font-weight:600}
+@font-face{font-family:Geist;src:url(assets/fonts/Geist-Bold.woff2) format("woff2");font-weight:700}
+@font-face{font-family:Thmanyah;src:url(assets/fonts/thmanyah-sans-400.woff2) format("woff2");font-weight:400}
+@font-face{font-family:Thmanyah;src:url(assets/fonts/thmanyah-sans-500.woff2) format("woff2");font-weight:500 600}
+@font-face{font-family:Thmanyah;src:url(assets/fonts/thmanyah-sans-700.woff2) format("woff2");font-weight:700}
+@font-face{font-family:"IBM Plex Sans Arabic";src:url(assets/fonts/IBMPlexSansArabic-Regular.ttf);font-weight:400}
+@font-face{font-family:"IBM Plex Sans Arabic";src:url(assets/fonts/IBMPlexSansArabic-Medium.ttf);font-weight:500 600}
+@font-face{font-family:"IBM Plex Sans Arabic";src:url(assets/fonts/IBMPlexSansArabic-Bold.ttf);font-weight:700}
+html,body{margin:0;background:#111}
+canvas{display:block;width:720px;height:720px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <filter id="thresh" color-interpolation-filters="sRGB">
+    <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -10"/>
+  </filter>
+</svg>
+<canvas id="c" width="1440" height="1440"></canvas>
+<script src="config.js"></script>
+<script>
+"use strict";
+// ───────────────────────── constants ─────────────────────────
+const W = 1440, C = 720, DUR = 0.8, LEN = 24;
+const CFG = window.CONFIG, fill = (s, o) => s.replace(/\{(\w+)\}/g, (_, k) => o[k]);
+const hexRGB = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)).join(",");
+const PAPER = CFG.palette.paper, INK = CFG.palette.ink, INK_RGB = hexRGB(INK), GREEN = CFG.palette.accent, PURPLE = CFG.palette.agent;
+const AR = "Geist, Thmanyah, 'IBM Plex Sans Arabic'";   // Latin/digits in Geist; Arabic in Thmanyah if its files are present, else IBM Plex Sans Arabic
+const font = (w, s) => `${w} ${s}px ${AR}`;
+
+// the song: its big hit lands on P (config.song.enterAt), beats follow its BPM
+const BPM = CFG.song.bpm, b = 60 / BPM, P = CFG.song.enterAt;
+const B = k => P + k * b;
+
+// ───────────────────────── beat table (all retiming lives here) ─────────────────────────
+const T = {
+  // open
+  tagOut: 0.30, lettersIn: 0.30, dotToCenter: 0.45, irisOpen: 1.05,
+  line1In: 1.50, line2In: 2.25, line2Out: 2.95,
+  // ask
+  pillIn: B(0), click1: B(1.5), toInput: B(1.5) + 0.02, typeA: 4.45, typeB: 5.30, send: B(4.5),
+  // find
+  toDot: B(4.5) + 0.02, ripple: B(4.5) + 0.80, scan: 6.75, scanDur: 1.0,
+  // write
+  pour: B(9), composer: B(9) + 0.05, agentIn: 8.20, typeC: 8.75, typeD: 9.75, save: B(13.5), countRun: B(13.5) + 0.05,
+  // night
+  orb: B(14.5), sleepIn: 10.90, clock1: B(16), clock2: B(17), clock3: B(18), dawn: 11.45, day: 12.75,
+  ringA: 10.95, ringB: 12.95, sleepOut: 12.60, blackFlood: 12.75,
+  // results
+  split: B(20), check1: 13.95, check2: 14.10, check3: 14.25,
+  // morning
+  merge: 14.95, toScreen: 15.95, bezelIn: 16.35, lockText: 16.45, n1: 16.60, n2: 16.75, n3: 16.90,
+  tap: 17.70, open: 17.72, toCard: 18.35,
+  // proof
+  tiles: 18.85, hover: 19.50, tilesOut: 20.25, toChart: 20.30, line: 20.60, lineDur: 0.85,
+  flood: 21.45, toCta: 21.65, ctaText: 22.05, ctaClick: 22.45,
+  // out
+  toEnd: 22.50, irisClose: 22.75, dotBack: 23.10, lettersOut: 23.15, tagIn: 23.20,
+};
+
+// ───────────────────────── math ─────────────────────────
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+function bezier(x1, y1, x2, y2) {
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+  const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const sx = t => ((ax * t + bx) * t + cx) * t, sy = t => ((ay * t + by) * t + cy) * t;
+  const dx = t => (3 * ax * t + 2 * bx) * t + cx;
+  return x => {
+    if (x <= 0) return 0; if (x >= 1) return 1;
+    let t = x;
+    for (let i = 0; i < 8; i++) { const d = dx(t), e = sx(t) - x; if (Math.abs(e) < 1e-6 || Math.abs(d) < 1e-6) break; t -= e / d; }
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 30 && Math.abs(sx(t) - x) > 1e-6; i++) { if (sx(t) < x) lo = t; else hi = t; t = (lo + hi) / 2; }
+    return sy(t);
+  };
+}
+const EASE = bezier(.45, 0, .15, 1);
+const E = p => EASE(clamp(p));
+const g = (t, t0, d = DUR) => E((t - t0) / d);                 // glide progress
+const win = (t, a, b2) => t >= a && t < b2;
+const hash = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+// iris: ease the *area*, not the radius
+const irisR = (r0, r1, p) => Math.sqrt(Math.max(0, r0 * r0 + (r1 * r1 - r0 * r0) * p));
+
+// ───────────────────────── canvases & assets ─────────────────────────
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const mk = (w = W, h = W) => { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; };
+const world = mk(), wctx = world.getContext("2d");
+const gooA = mk(), gooB = mk(), gooC = mk();
+const acc = mk(), actx = acc.getContext("2d");
+const IMG = {};
+const SRC = {
+  night: "assets/img/night.jpg", dawn: "assets/img/dawn.jpg", day: "assets/img/day.jpg",
+  nightB: "assets/img/night-blur.jpg", dawnB: "assets/img/dawn-blur.jpg", dayB: "assets/img/day-blur.jpg",
+  outside: "assets/img/outside.jpg", outsideB: "assets/img/outside-blur.jpg", icon: "assets/img/icon.png",
+  ptr: "assets/img/pointer.png", ptrP: "assets/img/pointer-purple.png",
+};
+async function load() {
+  await Promise.all(Object.entries(SRC).map(([k, s]) => new Promise((res, rej) => {
+    const i = new Image(); i.onload = () => { IMG[k] = i; res(); }; i.onerror = rej; i.src = s;
+  })));
+  const faces = [];
+  for (const w of [500, 600, 700]) faces.push(document.fonts.load(`${w} 40px Geist`, "0123456789"));
+  for (const w of [400, 500, 700]) for (const fam of ["Thmanyah", "'IBM Plex Sans Arabic'"]) faces.push(document.fonts.load(`${w} 40px ${fam}`, CFG.name).catch(() => []));
+  await Promise.all(faces); await document.fonts.ready;
+}
+
+// ───────────────────────── drawing helpers (all save/restore — never leak alpha) ─────────────────────────
+function rr(c, x, y, w, h, r, keep = false) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  if (!keep) c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+const box = s => [s.x - s.w / 2, s.y - s.h / 2, s.w, s.h, s.r];
+
+// sky = night → dawn → day, aligned plates crossfaded (the sunrise)
+function skyMix(t) {
+  return { dawn: g(t, T.dawn, 1.4), day: g(t, T.day, 1.6) };
+}
+function drawSky(c, t, blurred) {
+  const m = skyMix(t), s = blurred ? "B" : "";
+  c.drawImage(IMG["night" + s], 0, 0, W, W);
+  if (m.dawn > 0) { c.save(); c.globalAlpha *= m.dawn; c.drawImage(IMG["dawn" + s], 0, 0, W, W); c.restore(); }
+  if (m.day > 0) { c.save(); c.globalAlpha *= m.day; c.drawImage(IMG["day" + s], 0, 0, W, W); c.restore(); }
+}
+
+function softShadow(c, h, a = 1) {
+  c.shadowColor = `rgba(0,0,0,${0.32 * a})`;
+  c.shadowBlur = 10 + h * 0.10;
+  c.shadowOffsetY = 4 + h * 0.035;
+}
+
+// iOS-style glass: pre-blurred photo clipped to the shape, a tint, a gradient rim
+function glass(c, t, x, y, w, h, r, opt = {}) {
+  const a = opt.alpha ?? 1; if (a <= 0.001 || w < 1 || h < 1) return;
+  const bg = opt.bg || (cc => drawSky(cc, t, true));
+  c.save(); c.globalAlpha *= a;
+  if (opt.shadow !== false) { c.save(); softShadow(c, h, opt.shadowA ?? 1); rr(c, x, y, w, h, r); c.fillStyle = "rgba(0,0,0,0.9)"; c.fill(); c.restore(); }
+  c.save(); rr(c, x, y, w, h, r); c.clip(); bg(c);
+  c.fillStyle = opt.tint || "rgba(255,255,255,0.10)"; c.fillRect(x, y, w, h);
+  c.restore();
+  // rim light
+  const gr = c.createLinearGradient(x, y, x + w * 0.6, y + h);
+  gr.addColorStop(0, "rgba(255,255,255,0.55)"); gr.addColorStop(0.45, "rgba(255,255,255,0.07)"); gr.addColorStop(1, "rgba(255,255,255,0.28)");
+  rr(c, x + 0.75, y + 0.75, w - 1.5, h - 1.5, r - 0.75); c.strokeStyle = gr; c.lineWidth = 1.6; c.stroke();
+  c.restore();
+}
+function solid(c, x, y, w, h, r, color, a = 1, shadow = true) {
+  if (a <= 0.001 || w < 0.5 || h < 0.5) return;
+  c.save(); c.globalAlpha *= a; if (shadow) softShadow(c, h);
+  rr(c, x, y, w, h, r); c.fillStyle = color; c.fill(); c.restore();
+}
+function text(c, s, x, y, o = {}) {
+  c.save();
+  if (o.alpha !== undefined) c.globalAlpha *= o.alpha;
+  c.font = o.font || font(600, 40); c.fillStyle = o.color || "#fff";
+  c.direction = o.dir || "rtl"; c.textAlign = o.align || "center"; c.textBaseline = o.base || "middle";
+  if (o.shadow) { c.shadowColor = "rgba(0,0,0,0.35)"; c.shadowBlur = 18; c.shadowOffsetY = 3; }
+  c.fillText(s, x, y); c.restore();
+}
+function tw(c, s, f) { c.save(); c.font = f; c.direction = "rtl"; const w = c.measureText(s).width; c.restore(); return w; }
+// one text line rolling through a mask band: enter from below, leave upward
+function rollText(c, s, x, y, h, tIn, tOut, o = {}) {
+  const pin = g(c._t, tIn), pout = tOut == null ? 0 : g(c._t, tOut);
+  if (pin <= 0 || pout >= 1) return;
+  c.save(); c.beginPath(); c.rect(0, y - h / 2, W, h); c.clip();
+  const dy = (1 - pin) * h - pout * h;
+  text(c, s, x, y + dy, o); c.restore();
+}
+function cursor(c, x, y, s = 1, purple = false, label = null, a = 1) {
+  if (a <= 0) return;
+  const img = purple ? IMG.ptrP : IMG.ptr, k = 0.19 * s;
+  c.save(); c.globalAlpha *= a;
+  c.drawImage(img, x - 50 * k, y - 49 * k, 280 * k, 400 * k);
+  if (label) {
+    const f = font(600, 22), w = tw(c, label, f) + 28;
+    solid(c, x + 26, y + 46, w, 38, 19, PURPLE, 1, false);
+    text(c, label, x + 26 + w / 2, y + 66, { font: f });
+  }
+  c.restore();
+}
+const click = (t, tc) => 1 - 0.14 * Math.sin(Math.PI * clamp((t - tc + 0.06) / 0.2));
+function star(c, x, y, r, color) {
+  c.save(); c.beginPath();
+  for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4 - Math.PI / 2, rad = i % 2 ? r * 0.28 : r; c.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad); }
+  c.closePath(); c.fillStyle = color; c.fill(); c.restore();
+}
+function checkIcon(c, x, y, r, s) {
+  if (s <= 0) return;
+  c.save(); c.translate(x, y); c.scale(s, s);
+  c.beginPath(); c.arc(0, 0, r, 0, Math.PI * 2); c.fillStyle = GREEN; c.fill();
+  c.beginPath(); c.moveTo(-r * .42, 0); c.lineTo(-r * .1, r * .32); c.lineTo(r * .45, -r * .3);
+  c.strokeStyle = "#fff"; c.lineWidth = r * 0.2; c.lineCap = "round"; c.lineJoin = "round"; c.stroke(); c.restore();
+}
+function arrowIcon(c, x, y, s, color, dir = "up") {
+  c.save(); c.translate(x, y); if (dir === "left") c.rotate(-Math.PI / 2);
+  c.beginPath(); c.moveTo(0, s * .6); c.lineTo(0, -s * .6); c.moveTo(-s * .5, -s * .1); c.lineTo(0, -s * .6); c.lineTo(s * .5, -s * .1);
+  c.strokeStyle = color; c.lineWidth = s * 0.2; c.lineCap = "round"; c.lineJoin = "round"; c.stroke(); c.restore();
+}
+
+// ───────────────────────── the hero: one element morphing through every state ─────────────────────────
+// m = material weights { glass, ink, white, screen }
+const S = (x, y, w, h, r, m) => ({ x, y, w, h, r, m: Object.assign({ glass: 0, ink: 0, white: 0, screen: 0 }, m) });
+const PHONE = { w: 560, h: 1180, r: 86 };
+const HERO = [
+  { t: T.pillIn - 0.01, s: S(C, C, 0, 0, 0, { glass: 1 }) },
+  { t: T.pillIn, s: S(C, C, 400, 92, 46, { glass: 1 }) },
+  { t: T.toInput, s: S(C, C, 980, 112, 56, { glass: 1 }) },
+  { t: T.toDot, s: S(C, 760, 6.8, 6.8, 3.4, { white: 1 }) },
+  { t: T.composer - 0.01, s: S(C, C, 14, 14, 7, { glass: 1 }) },
+  { t: T.composer, s: S(C, C, 920, 520, 44, { glass: 1 }) },
+  { t: T.orb, s: S(C, 760, 240, 240, 120, { glass: 1 }) },
+  { t: T.merge + 0.01, s: S(C, C, 440, 108, 54, { ink: 1 }) },
+  { t: T.toScreen, s: S(C, C, PHONE.w, PHONE.h, PHONE.r, { ink: 1 }) },
+  { t: T.open + 0.5, s: S(C, C, PHONE.w, PHONE.h, PHONE.r, { white: 1 }), d: 0.3 },
+  { t: T.toCard, s: S(C, C, 1060, 800, 48, { white: 1 }) },
+  { t: T.toChart, s: S(C, C, 1060, 780, 48, { white: 1 }) },
+  { t: T.toCta, s: S(C, C, 660, 128, 64, { ink: 1 }) },
+  { t: T.toEnd, s: S(C, C, 34, 34, 17, { ink: 1 }) },
+];
+const MKEYS = ["glass", "ink", "white", "screen"];
+function mixS(a, z, p) {
+  const o = { x: lerp(a.x, z.x, p), y: lerp(a.y, z.y, p), w: lerp(a.w, z.w, p), h: lerp(a.h, z.h, p), r: lerp(a.r, z.r, p), m: {} };
+  for (const k of MKEYS) o.m[k] = lerp(a.m[k], z.m[k], p);
+  return o;
+}
+// precompute where each segment starts from (a pure function of the table)
+(function () { let prev = HERO[0].s; HERO[0].from = prev;
+  for (let i = 1; i < HERO.length; i++) { const k = HERO[i - 1]; HERO[i].from = mixS(k.from, k.s, E((HERO[i].t - k.t) / (k.d || DUR))); }
+})();
+function hero(t) {
+  let i = 0; while (i + 1 < HERO.length && HERO[i + 1].t <= t) i++;
+  const k = HERO[i]; if (t < k.t) return k.s;
+  return mixS(k.from, k.s, E((t - k.t) / (k.d || DUR)));
+}
+// visible windows of the hero (the grid and the goo take over in between)
+const heroVisible = t => (t >= T.pillIn && t < T.ripple + 0.02) || (t >= T.composer && t < T.split) || (t >= T.merge + 0.8 && t < LEN);
+
+// ───────────────────────── find: 23×15 grid ─────────────────────────
+const COLS = 23, ROWS = 15, GAP = 38, GX = C - (COLS - 1) * GAP / 2, GY = 760 - (ROWS - 1) * GAP / 2;
+const DOTS = [];
+(function () {
+  const cand = [];
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const x = GX + c * GAP, y = GY + r * GAP, d = Math.hypot(x - C, y - 760);
+    cand.push({ x, y, d, i: r * COLS + c, h: hash(r * 31 + c * 7.3) });
+  }
+  const order = cand.slice().sort((a, b2) => a.h - b2.h);
+  order.forEach((p, k) => p.lit = k < CFG.find.lit);
+  const maxD = Math.max(...cand.map(p => p.d));
+  const x0 = GX + (COLS - 1) * GAP + 40, x1 = GX - 40;          // scan right → left (RTL)
+  for (const p of cand) {
+    p.tAppear = T.ripple + (p.d / maxD) * 0.45;
+    p.tScan = T.scan + scanInv((x0 - p.x) / (x0 - x1)) * T.scanDur;
+    p.tFly = T.pour + hash(p.i * 3.1) * 0.35;
+    const a = hash(p.i * 5.7) * Math.PI * 2, rad = Math.sqrt(hash(p.i * 9.1));
+    p.ex = C + Math.cos(a) * 300 * rad; p.ey = C + Math.sin(a) * 160 * rad;
+    DOTS.push(p);
+  }
+  DOTS.litSorted = DOTS.filter(p => p.lit).map(p => p.tScan).sort((a, b2) => a - b2);
+})();
+function scanInv(u) { let lo = 0, hi = 1; for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (E(m) < u) lo = m; else hi = m; } return (lo + hi) / 2; }
+function scanX(t) { const x0 = GX + (COLS - 1) * GAP + 40, x1 = GX - 40; return lerp(x0, x1, g(t, T.scan, T.scanDur)); }
+function litCount(ft) { let n = 0; for (const s of DOTS.litSorted) if (s <= ft) n++; return n; }
+
+function drawGrid(c, t, ft) {
+  if (t < T.ripple || t > T.pour + 1.3) return;
+  // scan bar (glass sliver)
+  const sx = scanX(t), sp = g(t, T.scan, T.scanDur);
+  if (t > T.scan - 0.2 && sp < 1) {
+    const a = Math.min(g(t, T.scan - 0.2, 0.4), 1 - g(t, T.scan + T.scanDur - 0.3, 0.3));
+    glass(c, t, sx - 7, GY - 40, 14, (ROWS - 1) * GAP + 80, 7, { alpha: a, tint: "rgba(255,255,255,0.35)" });
+  }
+  const fadeU = g(t, T.pour, 0.6);
+  for (const p of DOTS) {
+    const ap = p.d < 1 ? 1 : g(t, p.tAppear, 0.5); if (ap <= 0) continue;
+    const lit = p.lit ? g(t, p.tScan, 0.25) : 0;
+    let x = p.x, y = p.y, r = lerp(3.4, 5.6, lit) * ap, a = lerp(lerp(1, 0.30, g(t, p.tAppear + 0.15, 0.6)), 1, lit);
+    if (p.lit) {
+      const fp = g(t, p.tFly, DUR);
+      if (fp > 0) {
+        const cx = (p.x + p.ex) / 2 + (p.x - C) * 0.25, cy = Math.min(p.y, p.ey) - 160;
+        x = (1 - fp) * (1 - fp) * p.x + 2 * (1 - fp) * fp * cx + fp * fp * p.ex;
+        y = (1 - fp) * (1 - fp) * p.y + 2 * (1 - fp) * fp * cy + fp * fp * p.ey;
+        r *= 1 - fp; a *= 1 - g(t, p.tFly + 0.45, 0.35);
+      }
+    } else { a *= 1 - fadeU; r *= 1 - 0.6 * fadeU; }
+    if (r <= 0.05 || a <= 0.01) continue;
+    c.save(); c.globalAlpha *= a; c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fillStyle = "#fff"; c.fill(); c.restore();
+  }
+  // counter (reads the frame's time)
+  const n = litCount(ft);
+  const la = Math.min(g(t, T.scan - 0.3, 0.5), 1 - g(t, T.pour, 0.4));
+  if (la > 0) text(c, fill(CFG.find.counter, { n }), C, GY - 88, { font: font(700, 46), alpha: la, shadow: true });
+}
+
+// ───────────────────────── write: the glass composer ─────────────────────────
+const BODY = CFG.write.body, WR = CFG.write;
+function composerContent(c, t, ft, s) {
+  const a = Math.min(g(t, T.composer + 0.45, 0.4), 1 - g(t, T.orb - 0.05, 0.25));
+  if (a <= 0) return;
+  const [x, y, w, h] = box(s), R = x + w - 56, L = x + 56;
+  c.save(); c.globalAlpha *= a; c.beginPath(); rr(c, x, y, w, h, s.r); c.clip();
+  text(c, WR.fileLabel, R, y + 64, { font: font(500, 26), color: "rgba(255,255,255,0.6)", align: "right" });
+  const chipW = tw(c, WR.fileChip, font(500, 24)) + 36;
+  solid(c, R - 84 - chipW, y + 44, chipW, 40, 20, "rgba(255,255,255,0.14)", 1, false);
+  text(c, WR.fileChip, R - 84 - chipW / 2, y + 64, { font: font(500, 24) });
+  const total = WR.total, done = Math.round(lerp(1, total, g(ft, T.countRun, DUR)));
+  const label = fill(done >= total ? WR.done : (ft >= T.countRun ? WR.progress : WR.draft), { n: done, total });
+  text(c, label, L, y + 64, { font: font(500, 24), color: "rgba(255,255,255,0.6)", align: "left" });
+  text(c, WR.title, R, y + 150, { font: font(700, 44), align: "right" });
+  // agent typing (character count reads the frame's time)
+  const n = Math.round(BODY.length * clamp((ft - T.typeC) / (T.typeD - T.typeC)));
+  const typed = BODY.slice(0, n), bf = font(400, 34);
+  text(c, typed, R, y + 222, { font: bf, color: "rgba(255,255,255,0.92)", align: "right" });
+  if (ft > T.typeC - 0.3 && ft < T.save + 0.2 && Math.floor(ft * 2.4) % 2 === 0) {
+    const cx = R - tw(c, typed, bf) - 6; c.fillStyle = PURPLE; c.fillRect(cx - 3, y + 200, 3, 44);
+  }
+  for (let i = 0; i < 3; i++) { const lw = [620, 700, 420][i]; solid(c, R - lw, y + 272 + i * 40, lw, 14, 7, "rgba(255,255,255,0.10)", 1, false); }
+  // save button
+  const bw = 170, bh = 64, bx = L, by = y + h - 56 - bh, pr = click(t, T.save);
+  c.save(); c.translate(bx + bw / 2, by + bh / 2); c.scale(pr, pr);
+  solid(c, -bw / 2, -bh / 2, bw, bh, bh / 2, "#fff", 1, true);
+  text(c, WR.save, 14, 2, { font: font(700, 30), color: INK });
+  checkIcon(c, -44, 0, 15, 1);
+  c.restore();
+  c.restore();
+}
+
+// ───────────────────────── night: orb, ring, clock ─────────────────────────
+const CLOCK = CFG.night.clock;
+function orbContent(c, t, ft, s) {
+  const a = Math.min(g(t, T.orb + 0.35, 0.45), 1 - g(t, T.blackFlood + 0.2, 0.5));
+  if (a <= 0) return;
+  const p = g(ft, T.ringA, T.ringB - T.ringA);
+  const R = s.w / 2 - 26;
+  c.save(); c.globalAlpha *= a;
+  c.beginPath(); c.arc(s.x, s.y, R, 0, Math.PI * 2); c.strokeStyle = "rgba(255,255,255,0.18)"; c.lineWidth = 9; c.stroke();
+  c.beginPath(); c.arc(s.x, s.y, R, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p); c.strokeStyle = "#fff"; c.lineCap = "round"; c.stroke();
+  text(c, `${Math.round(p * 100)}%`, s.x, s.y + 2, { font: font(600, 40), dir: "ltr" });
+  c.restore();
+}
+function clockChip(c, t, ft) {
+  const a = Math.min(g(t, T.orb + 0.3, 0.5), 1 - g(t, T.sleepOut + 0.1, 0.5));
+  if (a <= 0) return;
+  const cx = C, cy = 760 - 120 - 64, w = 220, h = 60;
+  glass(c, t, cx - w / 2, cy - h / 2, w, h, h / 2, { alpha: a });
+  const times = [T.orb, T.clock1, T.clock2, T.clock3];
+  c.save(); c.globalAlpha *= a; c._t = t;
+  for (let i = 0; i < 4; i++) {
+    const sun = i >= 2;
+    const tin = i === 0 ? T.orb - 1 : times[i], tout = i < 3 ? times[i + 1] : null;
+    const pin = g(t, tin, 0.6), pout = tout == null ? 0 : g(t, tout, 0.6);
+    if (pin <= 0 || pout >= 1) continue;
+    c.save(); c.beginPath(); c.rect(cx - w / 2, cy - h / 2, w, h); c.clip();
+    const dy = (1 - pin) * h - pout * h;
+    text(c, CLOCK[i], cx - 14, cy + dy + 2, { font: font(600, 28) });
+    // moon / sun glyph
+    const ix = cx + 66, iy = cy + dy;
+    c.beginPath(); c.arc(ix, iy, 11, 0, Math.PI * 2); c.fillStyle = sun ? "#FFD27A" : "#fff"; c.fill();
+    if (!sun) { c.globalCompositeOperation = "destination-out"; c.beginPath(); c.arc(ix + 6, iy - 5, 10, 0, Math.PI * 2); c.fill(); }
+    c.restore();
+  }
+  c.restore();
+}
+
+// ───────────────────────── goo (blur + alpha threshold) ─────────────────────────
+function goo(c, shapes, sigma, color) {
+  const a = gooA.getContext("2d"), bb = gooB.getContext("2d"), cc = gooC.getContext("2d");
+  a.clearRect(0, 0, W, W);
+  for (const s of shapes) { rr(a, ...box(s)); a.fillStyle = color; a.fill(); }
+  let src = gooA;
+  if (sigma > 0.3) {
+    bb.clearRect(0, 0, W, W); bb.filter = `blur(${sigma}px)`; bb.drawImage(gooA, 0, 0); bb.filter = "none";
+    cc.clearRect(0, 0, W, W); cc.filter = "url(#thresh)"; cc.drawImage(gooB, 0, 0); cc.filter = "none"; src = gooC;
+  }
+  const hMax = Math.max(...shapes.map(s => s.h));
+  c.save(); softShadow(c, hMax); c.drawImage(src, 0, 0); c.restore();
+}
+const PILL_TXT = CFG.results;
+const pillState = i => S(C, 610 + i * 118, 500, 96, 48, { ink: 1 });
+const ORB = S(C, 760, 240, 240, 120, { ink: 1 }), ISLAND = S(C, C, 440, 108, 54, { ink: 1 });
+function pillsAt(t) {
+  return [0, 1, 2].map(i => {
+    const ds = i * 0.06, dm = (2 - i) * 0.05;
+    const ps = E((t - T.split - ds) / (DUR - ds)), pm = E((t - T.merge - dm) / (DUR - dm));
+    return mixS(mixS(ORB, pillState(i), ps), ISLAND, pm);
+  });
+}
+function drawResults(c, t) {
+  if (t < T.split || t >= T.merge + 0.8) return;
+  const sp = clamp((t - T.split) / DUR), mp = clamp((t - T.merge) / DUR);
+  const sigma = 16 * (Math.sin(Math.PI * sp) * (t < T.merge ? 1 : 0) + Math.sin(Math.PI * mp));
+  const shapes = pillsAt(t);
+  goo(c, shapes, sigma, INK);
+  const ta = Math.min(g(t, T.split + 0.45, 0.4), 1 - g(t, T.merge - 0.05, 0.3));
+  if (ta > 0) shapes.forEach((s, i) => {
+    const [x, y, w] = box(s), R = x + w - 34;
+    checkIcon(c, R - 22, s.y, 22, E((t - [T.check1, T.check2, T.check3][i]) / 0.5) * ta);
+    text(c, PILL_TXT[i], R - 62, s.y + 2, { font: font(600, 36), align: "right", alpha: ta });
+  });
+}
+function islandContent(c, t, s) {
+  const a = Math.min(g(t, T.merge + 0.5, 0.4), 1 - g(t, T.toScreen, 0.25));
+  if (a <= 0) return;
+  const [x, y, w] = box(s);
+  c.save(); c.globalAlpha *= a;
+  c.save(); rr(c, x + w - 30 - 64, s.y - 32, 64, 64, 16); c.clip(); c.drawImage(IMG.icon, x + w - 30 - 64, s.y - 32, 64, 64); c.restore();
+  text(c, CFG.morning.island, x + w - 112, s.y + 2, { font: font(600, 32), align: "right" });
+  text(c, CFG.morning.islandTime, x + 36, s.y + 2, { font: font(500, 26), color: "rgba(255,255,255,0.55)", align: "left" });
+  c.restore();
+}
+
+// ───────────────────────── morning: phone ─────────────────────────
+const SCR = { x: C - PHONE.w / 2, y: C - PHONE.h / 2, w: PHONE.w, h: PHONE.h };
+function wallpaper(c, blurred) {   // the sunny day plate, cover-fit into the phone screen
+  const s = PHONE.h * 1.08;
+  c.drawImage(blurred ? IMG.outsideB : IMG.outside, C - s / 2 + 150, C - s / 2, s, s);
+}
+const NOTE = CFG.morning.notes.map(n => ({ title: CFG.morning.app, ...n }));
+const noteRect = i => ({ x: SCR.x + 24, y: SCR.y + 650 + i * 132, w: PHONE.w - 48, h: 116, r: 32 });
+function phoneOverlay(c, t, s) {
+  // bezel grows out of the screen edge, then retracts as the screen becomes a card
+  const bz = 18 * (g(t, T.bezelIn) - g(t, T.toCard - 0.05, 0.6));
+  if (bz > 0.2) {
+    const [x, y, w, h, r] = box(s);
+    c.save(); rr(c, x - bz, y - bz, w + bz * 2, h + bz * 2, r + bz); rr(c, x, y, w, h, r, true);
+    c.fillStyle = "#16171a"; c.fill("evenodd");
+    rr(c, x - bz + 1, y - bz + 1, w + bz * 2 - 2, h + bz * 2 - 2, r + bz - 1);
+    c.strokeStyle = `rgba(255,255,255,${0.22 * bz / 18})`; c.lineWidth = 2; c.stroke(); c.restore();
+  }
+}
+function lockContent(c, t, ft, s) {
+  if (t < T.toScreen + 0.3 || t > T.toCard + 0.4) return;
+  const [x, y, w, h, r] = box(s);
+  const back = g(t, T.open, DUR);                   // iOS: lock content recedes as the note opens
+  c.save(); rr(c, x, y, w, h, r); c.clip();
+  // dynamic island (re-forms at the top of the new screen)
+  solid(c, C - 74, y + 22, 148, 44, 22, "#000", g(t, T.toScreen + 0.45, 0.4) * (1 - back), false);
+  c.save(); c.globalAlpha *= 1 - back; c.translate(C, y + 300); c.scale(1 - 0.06 * back, 1 - 0.06 * back); c.translate(-C, -(y + 300));
+  c._t = t;
+  rollText(c, CFG.morning.date, C, y + 150, 50, T.lockText, null, { font: font(600, 32) });
+  rollText(c, CFG.morning.time, C, y + 290, 200, T.lockText + 0.08, null, { font: font(700, 190), dir: "ltr" });
+  c.restore();
+  [1, 2, 0].forEach(i => {
+    const n = NOTE[i], nr = noteRect(i), tin = [T.n1, T.n2, T.n3][i], pin = g(t, tin);
+    if (pin <= 0) return;
+    let rx = nr.x, ry = nr.y + (1 - pin) * 120, rw = nr.w, rh = nr.h, rad = nr.r, a = pin;
+    if (i === 0) {
+      const po = g(t, T.open, DUR);
+      rx = lerp(rx, x, po); ry = lerp(ry, y, po); rw = lerp(rw, w, po); rh = lerp(rh, h, po); rad = lerp(rad, r, po);
+      const pr = click(t, T.tap); if (t < T.open) { const cx = rx + rw / 2, cy = ry + rh / 2; rw *= pr; rh *= pr; rx = cx - rw / 2; ry = cy - rh / 2; }
+      glass(c, t, rx, ry, rw, rh, rad, { alpha: a, bg: cc => wallpaper(cc, true), tint: "rgba(255,255,255,0.42)", shadowA: 0.5 });
+      if (po > 0) solid(c, rx, ry, rw, rh, rad, PAPER, po, false);
+      noteText(c, n, rx, ry, rw, 1 - g(t, T.open, 0.3));
+    } else {
+      a *= 1 - back;
+      const sc = 1 - 0.06 * back;
+      c.save(); c.translate(C, y + 300); c.scale(sc, sc); c.translate(-C, -(y + 300));
+      glass(c, t, rx, ry, rw, rh, rad, { alpha: a, bg: cc => wallpaper(cc, true), tint: "rgba(255,255,255,0.42)", shadowA: 0.5 });
+      noteText(c, n, rx, ry, rw, a); c.restore();
+    }
+  });
+  c.restore();
+}
+function noteText(c, n, x, y, w, a) {
+  if (a <= 0) return;
+  c.save(); c.globalAlpha *= a;
+  const R = x + w - 22;
+  c.save(); rr(c, R - 60, y + 28, 60, 60, 14); c.clip(); c.drawImage(IMG.icon, R - 60, y + 28, 60, 60); c.restore();
+  text(c, n.title, R - 78, y + 42, { font: font(700, 25), color: INK, align: "right" });
+  text(c, n.when, x + 24, y + 42, { font: font(500, 21), color: `rgba(${INK_RGB},0.5)`, align: "left" });
+  text(c, n.body, R - 78, y + 80, { font: font(500, 26), color: INK, align: "right" });
+  c.restore();
+}
+
+// ───────────────────────── proof: library, then chart ─────────────────────────
+const DOCS = CFG.library.rows;   // layout fits 5 rows
+const LIST = { x: C - 530 + 44, w: 1060 - 88, y: C - 400 + 196, rh: 108 };
+const rowRect = i => ({ x: LIST.x, y: LIST.y + 10 + i * LIST.rh, w: LIST.w, h: LIST.rh });
+const HOVER_ROW = CFG.library.hoverRow;
+function docGlyph(c, x, y, k) {     // the app's file badge
+  solid(c, x, y, 70, 76, 16, "#ECEDE2", 1, false);
+  c.save(); c.strokeStyle = GREEN; c.lineWidth = 3; c.lineJoin = "round";
+  c.beginPath(); c.moveTo(x + 24, y + 14); c.lineTo(x + 40, y + 14); c.lineTo(x + 48, y + 22); c.lineTo(x + 48, y + 44); c.lineTo(x + 24, y + 44); c.closePath(); c.stroke();
+  c.beginPath(); c.moveTo(x + 29, y + 30); c.lineTo(x + 43, y + 30); c.moveTo(x + 29, y + 37); c.lineTo(x + 43, y + 37); c.stroke(); c.restore();
+  text(c, k, x + 36, y + 60, { font: font(700, 15), color: GREEN, dir: "ltr" });
+}
+function libraryContent(c, t, s) {
+  if (t < T.toCard + 0.3 || t > T.toChart + 0.6) return;
+  const [x, y, w] = box(s);
+  const ha = Math.min(g(t, T.toCard + 0.4, 0.5), 1 - g(t, T.tilesOut, 0.4));
+  text(c, CFG.library.title, x + w - 56, y + 82, { font: font(700, 58), color: INK, align: "right", alpha: ha });
+  text(c, CFG.library.subtitle, x + 56, y + 86, { font: font(600, 28), color: `rgba(${INK_RGB},0.55)`, align: "left", alpha: ha });
+  // list panel
+  const pa = Math.min(g(t, T.tiles - 0.15, 0.5), 1 - g(t, T.tilesOut + 0.1, 0.4));
+  if (pa > 0) solid(c, LIST.x, LIST.y, LIST.w, LIST.rh * 5 + 20, 32, "#fff", pa, false);
+  for (let i = 0; i < 5; i++) {
+    const r = rowRect(i), pin = g(t, T.tiles + i * 0.09, 0.6), pout = g(t, T.tilesOut + (4 - i) * 0.03, 0.4);
+    const a = pin * (1 - pout); if (a <= 0) continue;
+    const hov = i === HOVER_ROW ? g(t, T.hover + 0.35, 0.4) * (1 - pout) : 0;
+    const d = DOCS[i];
+    c.save(); c.globalAlpha *= a; c.translate(0, (1 - pin) * 26);
+    if (hov > 0) solid(c, r.x + 10, r.y + 6, r.w - 20, r.h - 12, 20, `rgba(${INK_RGB},0.05)`, hov, false);
+    const R = r.x + r.w - 26;
+    docGlyph(c, R - 70, r.y + 16, d.k);
+    text(c, d.t, R - 96, r.y + 40, { font: font(700, 30), color: INK, align: "right" });
+    if (d.star) { const sw = tw(c, d.t, font(700, 30)); star(c, R - 96 - sw - 22, r.y + 40, 13, "#F2994A"); }
+    text(c, d.m, R - 96, r.y + 80, { font: font(500, 23), color: `rgba(${INK_RGB},0.5)`, align: "right" });
+    c.beginPath(); c.moveTo(r.x + 46, r.y + 44); c.lineTo(r.x + 36, r.y + 54); c.lineTo(r.x + 46, r.y + 64);
+    c.strokeStyle = `rgba(${INK_RGB},0.35)`; c.lineWidth = 3; c.lineCap = "round"; c.stroke();
+    if (i < 4) { c.fillStyle = `rgba(${INK_RGB},0.08)`; c.fillRect(r.x + 40, r.y + r.h - 1, r.w - 80, 2); }
+    c.restore();
+    if (hov > 0) {
+      const tip = CFG.library.hoverTip, f = font(600, 24), tw2 = tw(c, tip, f) + 36;
+      const tx = r.x + 70, ty = r.y + 30 - 8 * (1 - hov);
+      c.save(); c.globalAlpha *= hov * a; solid(c, tx, ty, tw2, 50, 14, INK, 1, true);
+      text(c, tip, tx + tw2 / 2, ty + 26, { font: f }); c.restore();
+    }
+  }
+}
+// chart: cumulative words through the night, time flows right → left (RTL)
+const CH = { l: C - 530 + 70, r: C + 530 - 70, top: C - 390 + 300, bot: C - 390 + 660 };
+function curveV(u) { return clamp(0.06 + 0.86 * (u + 0.06 * Math.sin(u * 10.5) * (1 - u) + 0.03 * Math.sin(u * 23))); }
+const cpt = u => ({ x: lerp(CH.r, CH.l, u), y: lerp(CH.bot, CH.top, curveV(u)) });
+const lineP = t => g(t, T.line, T.lineDur);
+function chartContent(c, t, ft, s) {
+  if (t < T.toChart + 0.1 || t > T.toCta + 0.5) return;
+  const [x, y, w, h, r] = box(s);
+  const a = Math.min(g(t, T.toChart + 0.25, 0.45), 1 - g(t, T.toCta - 0.05, 0.35));
+  if (a <= 0) return;
+  c.save(); c.globalAlpha *= a; rr(c, x, y, w, h, r); c.clip();
+  const words = Math.round(CFG.chart.value * lineP(ft) / 10) * 10;
+  text(c, words.toLocaleString("en-US"), x + w - 64, y + 110, { font: font(700, 96), color: INK, align: "right", dir: "ltr" });
+  text(c, CFG.chart.label, x + w - 64, y + 190, { font: font(500, 28), color: `rgba(${INK_RGB},0.5)`, align: "right" });
+  for (let k = 0; k < 4; k++) { const yy = lerp(CH.bot, CH.top, k / 3); c.fillStyle = "rgba(37,39,31,0.08)"; c.fillRect(CH.l, yy, CH.r - CH.l, 2); }
+  CFG.chart.axis.map((l, i) => [l, i / 2]).forEach(([l, u]) => text(c, l, cpt(u).x, CH.bot + 44, { font: font(500, 24), color: `rgba(${INK_RGB},0.45)` }));
+  const q = lineP(t);
+  if (q > 0) {
+    c.beginPath(); const N = 120;
+    for (let i = 0; i <= N * q; i++) { const p = cpt(i / N); i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y); }
+    const tip = cpt(q); c.lineTo(tip.x, tip.y);
+    c.strokeStyle = INK; c.lineWidth = 6; c.lineJoin = "round"; c.lineCap = "round"; c.stroke();
+    c.lineTo(tip.x, CH.bot); c.lineTo(CH.r, CH.bot); c.closePath(); c.fillStyle = "rgba(37,39,31,0.05)"; c.fill();
+    // hover dot + value that follows the tip
+    c.beginPath(); c.arc(tip.x, tip.y, 11, 0, Math.PI * 2); c.fillStyle = INK; c.fill(); c.lineWidth = 4; c.strokeStyle = "#fff"; c.stroke();
+    const val = (Math.round(CFG.chart.value * lineP(ft) / 10) * 10).toLocaleString("en-US"), f = font(600, 24), vw = tw(c, val, f) + 30;
+    const ha = g(t, T.line + 0.1, 0.4) * (1 - g(t, T.flood - 0.1, 0.3));
+    c.save(); c.globalAlpha *= ha; solid(c, tip.x - vw / 2, tip.y - 76, vw, 46, 12, INK, 1, true); text(c, val, tip.x, tip.y - 52, { font: f, dir: "ltr" }); c.restore();
+  }
+  c.restore();
+}
+function floodInk(c, t, s) {      // black flood from the line's end, clipped to the card
+  const p = g(t, T.flood, DUR); if (p <= 0 || t > T.toCta + DUR) return;
+  const end = cpt(1), [x, y, w, h, r] = box(s);
+  c.save(); rr(c, x, y, w, h, r); c.clip();
+  c.beginPath(); c.arc(end.x, end.y, irisR(0, 1250, p), 0, Math.PI * 2); c.fillStyle = INK; c.fill(); c.restore();
+}
+function ctaContent(c, t, s) {
+  const a = Math.min(g(t, T.ctaText, 0.45), 1 - g(t, T.toEnd, 0.25)); if (a <= 0) return;
+  const pr = click(t, T.ctaClick);
+  c.save(); c.globalAlpha *= a; c.translate(s.x, s.y); c.scale(pr, pr);
+  text(c, CFG.cta, 34, 2, { font: font(700, 42) });
+  arrowIcon(c, -s.w / 2 + 70, 0, 26, "#fff", "left");
+  c.restore();
+}
+
+// ───────────────────────── hero renderer ─────────────────────────
+function drawHero(c, t, ft) {
+  if (!heroVisible(t)) return;
+  const s = hero(t), [x, y, w, h, r] = box(s);
+  if (w < 0.5) return;
+  // push the ask pill's click
+  let sc = 1; if (t > T.click1 - 0.2 && t < T.click1 + 0.2) sc = click(t, T.click1);
+  c.save(); c.translate(s.x, s.y); c.scale(sc, sc); c.translate(-s.x, -s.y);
+  const m = s.m;
+  if (m.glass > 0.001) glass(c, t, x, y, w, h, r, { alpha: Math.min(1, m.glass + m.white * 0) });
+  if (m.screen > 0.001) {
+    c.save(); c.globalAlpha *= m.screen; softShadow(c, h); rr(c, x, y, w, h, r); c.fillStyle = "#000"; c.fill(); c.restore();
+    c.save(); c.globalAlpha *= m.screen; rr(c, x, y, w, h, r); c.clip(); wallpaper(c, false);
+    c.fillStyle = "rgba(0,0,0,0.12)"; c.fillRect(x, y, w, h); c.restore();
+  }
+  if (m.ink > 0.001) solid(c, x, y, w, h, r, INK, m.ink, m.glass < 0.5 && m.screen < 0.5);
+  // lock screen lights up from the island outward (a flood, not a fade)
+  if (t > T.toScreen + 0.2 && t < T.toCard + DUR) {
+    const p = g(t, T.toScreen + 0.2, DUR);
+    c.save(); rr(c, x, y, w, h, r); c.clip(); c.beginPath(); c.arc(s.x, s.y, irisR(0, 700, p), 0, Math.PI * 2); c.clip();
+    wallpaper(c, false); c.fillStyle = "rgba(0,0,0,0.12)"; c.fillRect(x, y, w, h); c.restore();
+  }
+  if (m.white > 0.001) solid(c, x, y, w, h, r, PAPER, m.white, m.glass < 0.5 && m.ink < 0.5 && m.screen < 0.5);
+  // black flood inside the orb (results)
+  if (t > T.blackFlood && t < T.split) {
+    const p = g(t, T.blackFlood, DUR);
+    c.save(); rr(c, x, y, w, h, r); c.clip(); c.beginPath(); c.arc(s.x, s.y, irisR(0, w * 0.75, p), 0, Math.PI * 2); c.fillStyle = INK; c.fill(); c.restore();
+  }
+  // pill / input content
+  if (t < T.toDot + 0.4) askContent(c, t, ft, s);
+  composerContent(c, t, ft, s);
+  orbContent(c, t, ft, s);
+  islandContent(c, t, s);
+  lockContent(c, t, ft, s);
+  phoneOverlay(c, t, s);
+  libraryContent(c, t, s);
+  chartContent(c, t, ft, s);
+  floodInk(c, t, s);
+  ctaContent(c, t, s);
+  c.restore();
+}
+const JOB = CFG.ask.job;
+function askContent(c, t, ft, s) {
+  const [x, y, w, h] = box(s);
+  // "Ask" label
+  const la = Math.min(g(t, T.pillIn + 0.3, 0.4), 1 - g(t, T.toInput, 0.25));
+  if (la > 0) {
+    c.save(); c.globalAlpha *= la;
+    text(c, CFG.ask.pill, s.x - 18, s.y + 2, { font: font(600, 34) });
+    star(c, s.x + 138, s.y, 15, "#fff"); c.restore();
+  }
+  const ia = Math.min(g(t, T.toInput + 0.4, 0.4), 1 - g(t, T.toDot, 0.25));
+  if (ia > 0) {
+    c.save(); c.globalAlpha *= ia; rr(c, x, y, w, h, s.r); c.clip();
+    const n = Math.round(JOB.length * clamp((ft - T.typeA) / (T.typeB - T.typeA)));
+    const typed = JOB.slice(0, n), f = font(500, 38), R = x + w - 48;
+    if (n === 0) text(c, CFG.ask.placeholder, R, s.y + 2, { font: f, color: "rgba(255,255,255,0.4)", align: "right" });
+    text(c, typed, R, s.y + 2, { font: f, align: "right" });
+    if (Math.floor(ft * 2.4) % 2 === 0 || (ft > T.typeA && ft < T.typeB)) { c.fillStyle = "#fff"; c.fillRect(R - tw(c, typed, f) - 7, s.y - 22, 3, 44); }
+    const bx = x + 30 + 30, pr = click(t, T.send);
+    c.save(); c.translate(bx, s.y); c.scale(pr, pr);
+    c.beginPath(); c.arc(0, 0, 30, 0, Math.PI * 2); c.fillStyle = "#fff"; c.fill();
+    arrowIcon(c, 0, 0, 22, INK, "up"); c.restore();
+    c.restore();
+  }
+}
+
+// ───────────────────────── cursors ─────────────────────────
+// a glide chain: [startTime, target] — each leg glides 0.8s from wherever the pointer is
+const lerpP = (a, z, p) => ({ x: lerp(a.x, z.x, p), y: lerp(a.y, z.y, p) });
+const res = (tg, t) => typeof tg === "function" ? tg(t) : tg;
+function chain(cmds, t) {
+  let from = res(cmds[0][1], cmds[0][0]);
+  for (let i = 1; i < cmds.length; i++) {
+    const [ti, tg] = cmds[i];
+    if (t < ti) return from;
+    const last = i + 1 >= cmds.length || t < cmds[i + 1][0];
+    const tEnd = last ? t : cmds[i + 1][0];
+    const cur = lerpP(from, res(tg, tEnd), E((tEnd - ti) / DUR));
+    if (last) return cur;
+    from = cur;
+  }
+  return from;
+}
+const P2 = (x, y) => ({ x, y });
+const sendPos = () => P2(C - 490 + 60 + 10, C + 12);
+const tipPos = t => { const p = cpt(lineP(t)); return P2(p.x + 16, p.y + 26); };
+const tileHover = () => { const r = rowRect(HOVER_ROW); return P2(r.x + 300, r.y + 70); };
+const CUR = [
+  [0, P2(1500, 1560)],
+  [T.click1 - DUR, P2(790, 744)],
+  [T.send - DUR - 0.1, sendPos()],
+  [T.send + 0.2, P2(1500, 1500)],
+  [T.tap - DUR, P2(860, noteRect(0).y + 70)],
+  [T.tap + 0.45, P2(1180, 1220)],
+  [T.hover - DUR, tileHover()],
+  [T.line - 0.25, tipPos],
+  [T.ctaClick - DUR, P2(C + 150, C + 30)],
+  [T.toEnd + 0.15, P2(1500, 1540)],
+];
+const userCursorPos = t => chain(CUR, t);
+function caretPos(tt) {
+  const s = hero(tt), [x, y, w] = box(s), R = x + w - 56;
+  const n = Math.round(BODY.length * clamp((tt - T.typeC) / (T.typeD - T.typeC)));
+  return P2(R - tw(ctx, BODY.slice(0, n), font(400, 34)) + 12, y + 254);
+}
+function savePos() { const s = hero(T.save), [x, y, w, h] = box(s); return P2(x + 56 + 112, y + h - 56 - 22); }
+const AG = () => [
+  [0, P2(1560, 1300)],
+  [T.agentIn, P2(1080, 780)],
+  [T.typeC - 0.1, caretPos],
+  [T.save - DUR, savePos()],
+  [T.save + 0.18, P2(1560, 260)],
+];
+const agentPos = t => chain(AG(), t);
+
+// ───────────────────────── the inside world ─────────────────────────
+function cameraScale(t) {
+  return 1.10 - 0.10 * g(t, T.irisOpen, DUR)                // settle as the iris opens
+    + 0.05 * g(t, T.orb, DUR) - 0.05 * g(t, T.split, DUR)   // lean in for the night
+    + 0.04 * g(t, T.toScreen, DUR) - 0.04 * g(t, T.toCard, DUR);
+}
+function drawWorld(c, t, ft) {
+  c._t = t;
+  c.save(); c.clearRect(0, 0, W, W);
+  const k = cameraScale(t); c.translate(C, C); c.scale(k, k); c.translate(-C, -C);
+  drawSky(c, t, false);
+  // open lines
+  rollText(c, CFG.open[0], C, C, 130, T.line1In, T.line2In, { font: font(700, 80), shadow: true });
+  rollText(c, CFG.open[1], C, C, 130, T.line2In, T.line2Out, { font: font(700, 80), shadow: true });
+  rollText(c, CFG.night.sleep, C, 400, 140, T.sleepIn, T.sleepOut, { font: font(700, 96), shadow: true });
+  drawGrid(c, t, ft);
+  drawHero(c, t, ft);
+  clockChip(c, t, ft);
+  drawResults(c, t);
+  c.restore();
+}
+
+// ───────────────────────── outside: the wordmark ─────────────────────────
+const WM = { f: font(700, 190), y: 770, r: 19, gap: 14, icon: 176, igap: 34 };
+function wordmarkGeom() {   // RTL row: [icon][مستخرج][.] — the icon leads on the right
+  const lw = tw(ctx, CFG.name, WM.f), total = WM.icon + WM.igap + lw + WM.gap + WM.r * 2, left = C - total / 2;
+  return { lw, left, dotX: left + WM.r, dotY: WM.y - WM.r - 2, textR: left + total - WM.icon - WM.igap, iconX: left + total - WM.icon, iconY: WM.y - 64 - WM.icon / 2 };
+}
+function drawOutside(c, t) {
+  c.drawImage(IMG.outside, 0, 0, W, W);
+  const G = wordmarkGeom();
+  const slide = g(t, T.lettersIn) * (1 - g(t, T.lettersOut));   // 0 = letters home, 1 = inside the period
+  const back = g(t, T.dotBack), go = g(t, T.dotToCenter);
+  const dp = t < 12 ? go : 1 - back;
+  const dx = lerp(G.dotX, C, dp), dy = lerp(G.dotY, C, dp);
+  // letters (follow the dot, vanish into it)
+  if (slide < 1) {
+    c.save(); c.beginPath(); c.rect(dx, 0, W, W); c.clip();
+    const off = (WM.icon + WM.igap + G.lw + WM.gap + WM.r) * slide, ox = dx - G.dotX - off, oy = dy - G.dotY;
+    text(c, CFG.name, G.textR + ox, WM.y + oy, { font: WM.f, color: INK, align: "right", base: "alphabetic" });
+    // the app icon (iOS-style rounded mask, soft shadow)
+    const ix = G.iconX + ox, iy = G.iconY + oy, S2 = WM.icon, R2 = S2 * 0.2237;
+    c.save(); softShadow(c, S2, 0.8); rr(c, ix, iy, S2, S2, R2); c.fillStyle = "#fff"; c.fill(); c.restore();
+    c.save(); rr(c, ix, iy, S2, S2, R2); c.clip(); c.drawImage(IMG.icon, ix, iy, S2, S2); c.restore();
+    c.restore();
+  }
+  // tagline through its mask line
+  const tagP = (1 - g(t, T.tagOut)) + g(t, T.tagIn);
+  if (tagP > 0) {
+    c.save(); c.beginPath(); c.rect(0, 822, W, 64); c.clip();
+    text(c, CFG.tagline, C, 854 + (1 - tagP) * 64, { font: font(500, 42), color: `rgba(${INK_RGB},0.72)` });
+    c.restore();
+  }
+  return { dx, dy };
+}
+
+// ───────────────────────── seek(t): the whole frame ─────────────────────────
+function seek(t, ft = t) {
+  t = ((t % LEN) + LEN) % LEN; ft = ((ft % LEN) + LEN) % LEN;
+  ctx.save(); ctx.globalAlpha = 1; ctx.clearRect(0, 0, W, W);
+  const { dx, dy } = drawOutside(ctx, t);
+  // iris: area-eased, opens out of the period and closes back into it
+  const FULL = 1060;
+  let R, hole;
+  if (t < 12) { const p = g(t, T.irisOpen); R = irisR(WM.r, FULL, p); hole = irisR(0, FULL, g(t, T.irisOpen + 0.05, DUR - 0.05)); }
+  else { const p = g(t, T.irisClose); R = irisR(FULL, WM.r, p); hole = R; }
+  if (R > WM.r + 0.01 || (t >= 12 && t < T.irisClose + DUR)) {
+    drawWorld(wctx, t, ft);
+    ctx.save(); ctx.beginPath(); ctx.arc(dx, dy, R, 0, Math.PI * 2); ctx.clip();
+    ctx.drawImage(world, dx - C, dy - C);   // the world rides with the period
+    if (hole < R - 0.5) {   // iris blades: the period's ink retreats as a ring
+      ctx.beginPath(); ctx.arc(dx, dy, R, 0, Math.PI * 2); ctx.arc(dx, dy, Math.max(0, hole), 0, Math.PI * 2, true);
+      ctx.fillStyle = INK; ctx.fill();
+    }
+    ctx.restore();
+  }
+  // the period itself (when closed)
+  if (R <= WM.r + 0.01 && !(t >= 12 && t < T.irisClose + DUR)) { ctx.beginPath(); ctx.arc(dx, dy, WM.r, 0, Math.PI * 2); ctx.fillStyle = INK; ctx.fill(); }
+  if (t >= T.irisClose + DUR - 0.001 && t < LEN) { ctx.beginPath(); ctx.arc(dx, dy, WM.r, 0, Math.PI * 2); ctx.fillStyle = INK; ctx.fill(); }
+  // cursors sit above everything (they're the viewer's hand, not the world)
+  const k = cameraScale(t), cam = p => ({ x: C + (p.x - C) * k, y: C + (p.y - C) * k });
+  const u = cam(userCursorPos(t));
+  if (u.x < W + 40 && u.y < W + 40) {
+    let s = 1; for (const tc of [T.click1, T.send, T.tap, T.ctaClick]) s = Math.min(s, click(t, tc));
+    cursor(ctx, u.x, u.y, s);
+  }
+  if (t > T.agentIn && t < T.save + 1.2) { const a = cam(agentPos(t)); cursor(ctx, a.x, a.y, click(t, T.save), true, WR.agentLabel); }
+  ctx.restore();
+}
+
+// render one frame with motion-blur subframes into the visible canvas
+function frame(t, sub = 4) {
+  if (sub <= 1) { seek(t, t); return; }
+  actx.clearRect(0, 0, W, W);
+  for (let i = 0; i < sub; i++) {
+    const ts = t + ((i + 0.5) / sub - 0.5) * (1 / 60) * 0.9;
+    seek(ts, t);                                     // counters read the frame's time, not the subframe's
+    actx.globalAlpha = 1 / (i + 1); actx.drawImage(cv, 0, 0);
+  }
+  actx.globalAlpha = 1;
+  ctx.clearRect(0, 0, W, W); ctx.drawImage(acc, 0, 0);
+}
+window.T = T; window.B = B; window.JOB = JOB; window.BODY = BODY; window.seek = seek; window.frame = frame;
+window.ready = load().then(() => { const q = new URLSearchParams(location.search); frame(parseFloat(q.get("t") || "0"), 1); return true; });
+</script>
+</body>
+</html>

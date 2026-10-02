@@ -1,0 +1,8 @@
+.DS_Store
+node_modules/
+out/
+# not redistributable — supplied locally
+template/assets/fonts/thmanyah-*
+template/assets/img/pointer*.png
+template/assets/music/*
+template/assets/gen/*
